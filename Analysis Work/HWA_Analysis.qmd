@@ -1,0 +1,909 @@
+---
+title: "HWA Analysis"
+author: "Ryan Schmidt and Matthew Aiello-Lammens"
+date: last-modified
+date-format: "MM/DD/YYYY"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r load_packages, echo=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(vegan)
+library(DescTools)
+library(effects)
+library(car)
+library(sf)
+library(tigris)
+library(leaflet)
+library(grid)
+```
+
+## Get Data
+
+Read in the data sets and rename some columns to ensure consistency across data sets.
+
+```{r}
+canopy <- read.csv("Hemlock Data(Canopy).csv")
+ground_cover <- read.csv("Hemlock Data(Ground_Cover).csv")
+hwa <- read.csv("Hemlock Data(HWA).csv")
+trees <- read.csv("Hemlock Data(Trees).csv")
+```
+
+```{r, results='hide'}
+### Standardize column names for easier coding
+colnames(canopy) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","North","East","South","West","Average")
+colnames(ground_cover) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Species","Common","Native_or_Non_Native","Coverage","Notes")
+colnames(hwa) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Tree","HWA","Transparency","LCR","Health_Value")
+colnames(trees) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Species_Name","Common","DBH_cm","Notes")
+
+### Diagnostics: Check unique values
+sort(unique(ground_cover$Species))
+sort(unique(trees$Species_Name))
+```
+
+## Plot-level Severity
+
+```{r}
+plot_sev <- hwa %>%
+  group_by(Site, Plot, Stand_Health) %>%
+  summarize(
+    HWA_mean = mean(HWA, na.rm = TRUE),
+    HWA_median = median(HWA, na.rm = TRUE),
+    HWA_present_pct = mean(HWA > 0, na.rm = TRUE),
+    Transp_mean = mean(Transparency, na.rm = TRUE),
+    LCR_mean = mean(LCR, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+plot_sev_hist <- hwa %>%
+  group_by(DEP_DEC_Site, Stand_Health) %>%
+  summarize(
+    HWA_mean = mean(HWA, na.rm = TRUE),
+    HWA_median = median(HWA, na.rm = TRUE),
+    HWA_present_pct = mean(HWA > 0, na.rm = TRUE),
+    Transp_mean = mean(Transparency, na.rm = TRUE),
+    LCR_mean = mean(LCR, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+## Calculate diversity metrics
+
+### Richness
+
+```{r}
+# Tree richness
+tree_richness <- trees %>%
+  group_by(Site, Plot) %>%
+  summarize(Tree_Richness = n_distinct(Species_Name, na.rm = TRUE),
+            n_Trees = n(), .groups = "drop")
+
+tree_richness_hist <- trees %>%
+  group_by(DEP_DEC_Site) %>%
+  summarize(Tree_Richness = n_distinct(Species_Name, na.rm = TRUE),
+            n_Trees = n(), .groups = "drop")
+
+# Plant richness
+plant_richness <- ground_cover %>%
+  group_by(Site, Plot) %>%
+  summarize(Plant_Richness = n_distinct(Species, na.rm = TRUE),
+            .groups = "drop")
+
+plant_richness_hist <- ground_cover %>%
+  group_by(DEP_DEC_Site) %>%
+  summarize(Plant_Richness = n_distinct(Species, na.rm = TRUE),
+            .groups = "drop")
+
+richness_and_severity <- plot_sev %>%
+  select(Site, Plot, Stand_Health) %>%
+  distinct() %>%
+  left_join(tree_richness, by = c("Site","Plot")) %>%
+  left_join(plant_richness, by = c("Site","Plot"))
+
+richness_and_severity_hist <- plot_sev_hist %>%
+  select(DEP_DEC_Site, Stand_Health) %>%
+  distinct() %>%
+  left_join(tree_richness_hist,  by = "DEP_DEC_Site") %>%
+  left_join(plant_richness_hist, by = "DEP_DEC_Site")
+
+# Reorder Stand_Health levels
+richness_combined <- richness_and_severity %>%
+  mutate(Stand_Health = factor(Stand_Health, 
+                               levels = c("Severe", "Moderate", "Healthy"), 
+                               ordered = TRUE))
+
+richness_combined_hist <- richness_and_severity_hist %>%
+  mutate(Stand_Health = factor(Stand_Health, 
+                               levels = c("Severe", "Moderate", "Healthy"), 
+                               ordered = TRUE))
+
+# Plots
+
+plant_richness_by_stand <- ggplot(richness_combined, aes(x = Stand_Health, y = Plant_Richness)) +
+  geom_boxplot() +
+  labs(title = "Plant Richness by Stand Health", x = "Stand Health", y = "Plant Species Richness")
+plant_richness_by_stand
+
+tree_richness_by_stand_health <- ggplot(richness_combined, aes(x = Stand_Health, y = Tree_Richness)) +
+  geom_boxplot() +
+  labs(title = "Tree Richness by Stand Health", x = "Stand Health", y = "Tree Species Richness")
+tree_richness_by_stand_health
+
+## Historical Plots
+
+plant_richness_by_stand_hist <- ggplot(
+  data = richness_combined_hist,
+  mapping = aes(x = Stand_Health, y = Plant_Richness)
+) +
+  geom_boxplot() +
+  labs(
+    title = "Historical Site Plant Richness by Stand Health",
+    x = "Stand Health",
+    y = "Plant Species Richness"
+  )
+plant_richness_by_stand_hist
+
+
+tree_richness_by_stand_health_hist <- ggplot(
+  data = richness_combined_hist,
+  mapping = aes(x = Stand_Health, y = Tree_Richness)
+) +
+  geom_boxplot() +
+  labs(
+    title = "Historical Site Tree Richness by Stand Health",
+    x = "Stand Health",
+    y = "Tree Species Richness"
+  )
+tree_richness_by_stand_health_hist
+```
+
+#### Richniss stats analysis
+
+No significant differences.
+
+```{r}
+plant_richness_by_stand_lm <- lm(Plant_Richness ~ Stand_Health, data = richness_combined)
+anova(plant_richness_by_stand_lm)
+
+tree_richness_by_stand_lm <- lm(Tree_Richness ~ Stand_Health, data = richness_combined)
+anova(tree_richness_by_stand_lm)
+
+# Historical Site
+
+plant_richness_hist_lm <- lm(Plant_Richness ~ Stand_Health, data = richness_combined_hist)
+anova(plant_richness_hist_lm)
+
+tree_richness_hist_lm  <- lm(Tree_Richness  ~ Stand_Health, data = richness_combined_hist)
+anova(tree_richness_hist_lm)
+
+```
+
+### Tree DBH analysis
+
+```{r}
+# Summary table
+
+trees %>%
+  summarize(
+    min_dbh  = min(DBH_cm, na.rm = TRUE),
+    q1_dbh   = quantile(DBH_cm, 0.25, na.rm = TRUE),
+    med_dbh  = median(DBH_cm, na.rm = TRUE),
+    mean_dbh = mean(DBH_cm, na.rm = TRUE),
+    q3_dbh   = quantile(DBH_cm, 0.75, na.rm = TRUE),
+    max_dbh  = max(DBH_cm, na.rm = TRUE)
+  )
+
+# Reorder trees
+
+trees <- trees %>%
+  mutate(
+    Hemlock = if_else(str_detect(Species_Name, regex("tsuga|hemlock", TRUE)), "Hemlock", "Other"),
+    Stand_Health = factor(Stand_Health, levels = c("Severe", "Moderate", "Healthy"), ordered = TRUE)
+  )
+
+
+# DBH by Stand_Health (all trees)
+
+dbh_by_stand_health_all_trees <- ggplot(trees, aes(x = Stand_Health, y = DBH_cm, color = Hemlock)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  labs(title = "DBH by Stand Health", x = "Stand Health", y = "DBH (cm)", color = NULL)
+dbh_by_stand_health_all_trees
+
+dbh_by_stand_health_all_trees1 <- ggplot(trees, aes(x = Stand_Health, y = DBH_cm, color = Hemlock)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  labs(x = "Stand Health", y = "DBH (cm)", color = NULL)
+dbh_by_stand_health_all_trees1
+
+# DBH by Stand_Health (hemlocks only)
+
+dbh_by_stand_health_hemlocks <- trees %>%
+  filter(Hemlock == "Hemlock") %>%
+  ggplot(aes(x = Stand_Health, y = DBH_cm)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  labs(title = "DBH by Stand Health (Hemlocks)", x = "Stand Health", y = "DBH (cm)")
+dbh_by_stand_health_hemlocks
+
+
+```
+
+```{r}
+dbh_lm <- lm(DBH_cm ~ Stand_Health * Hemlock, data = trees)
+anova(dbh_lm)
+summary(dbh_lm)
+
+TukeyHSD(aov(DBH_cm ~ Stand_Health * Hemlock, data = trees))
+```
+
+```{r}
+plot(allEffects(dbh_lm), main="")
+```
+
+Look at DBHs based on percent of hemlocks in plot
+
+```{r}
+trees_summary <-
+  trees %>%
+  group_by(Site, Plot, Stand_Health, Hemlock) %>%
+  summarise(avg_DBH = mean(DBH_cm),
+            tree_cnt = n())
+
+ggplot(data = trees_summary, aes(x = Plot, y = tree_cnt, color = Stand_Health, shape = Hemlock)) +
+  geom_point(size = 3) +
+  theme_bw()
+```
+
+```{r}
+ggplot(data = trees_summary, aes(x = tree_cnt, y = avg_DBH, color = Stand_Health, shape = Hemlock)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = FALSE, aes(linetype = Hemlock)) +
+  theme_bw()
+
+ggsave(filename = "plot_dbh_vs_tree_cnt.png")
+```
+
+### Simpson's Index (ground cover)
+
+```{r}
+ground_comm <- ground_cover %>%
+  group_by(Site, Plot, Species) %>%
+  summarize(Total_Cover = sum(Coverage, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::unite(PlotKey, Site, Plot, remove=FALSE) %>%
+  pivot_wider(names_from = Species, values_from = Total_Cover, values_fill = 0)
+
+ground_mat <- ground_comm %>%
+  select(-Site, -Plot) %>%
+  tibble::column_to_rownames("PlotKey") %>%
+  data.matrix()   
+
+#ground_mat <- ground_comm %>%
+#  column_to_rownames("PlotKey") %>%
+#  as.matrix()
+
+### Simpson’s index (Lambda) per plot
+lambda <- vegan::diversity(ground_mat, index = "simpson")
+
+simpson_df <- tibble(
+  PlotKey    = names(lambda),
+  Simpson = as.numeric(lambda)) %>%
+  separate(PlotKey, into = c("Site","Plot"), sep = "_") %>%
+  left_join(plot_sev %>% select(Site, Plot, Stand_Health), by = c("Site","Plot")) %>%
+  mutate(
+    Stand_Health = factor(Stand_Health,
+                          levels = c("Severe", "Moderate", "Healthy"),
+                          ordered = TRUE)
+  )
+
+simpsons_index_by_stand_health <- ggplot(simpson_df, aes(x = Stand_Health, y = Simpson)) +
+  geom_boxplot() +
+  labs(
+    # title = "Simpson's Index ( 1- λ) by Stand Health",
+    x = "Stand Health",
+    y = "Simpson's Index (1 - λ)"
+  )
+simpsons_index_by_stand_health
+
+
+
+```
+
+# Significance Tests for Simpson's Index
+
+```{r}
+# ANOVA for Simpson's Index
+simpson_aov <- aov(Simpson ~ Stand_Health, data = simpson_df)
+summary(simpson_aov)
+
+# Normality of residuals
+shapiro.test(residuals(simpson_aov))
+
+# Homogeneity of variance
+library(car)
+leveneTest(Simpson ~ Stand_Health, data = simpson_df)
+
+TukeyHSD(simpson_aov)
+
+kruskal.test(Simpson ~ Stand_Health, data = simpson_df)
+
+pairwise.wilcox.test(simpson_df$Simpson, simpson_df$Stand_Health,
+                     p.adjust.method = "BH")
+```
+
+### Non Native Cover Proportion
+
+```{r}
+non_native_cover <- ground_cover %>%
+  group_by(Site, Plot) %>%
+  summarize(
+    Total_Cover     = sum(Coverage, na.rm = TRUE),
+    NonNative_Cover = sum(Coverage[Native_or_Non_Native == "non_native"], na.rm = TRUE),
+    NonNative_Prop  = if_else(Total_Cover > 0, NonNative_Cover / Total_Cover, NA_real_),
+    .groups = "drop"
+  ) %>%
+  left_join(plot_sev %>% select(Site, Plot, Stand_Health), by = c("Site","Plot")) %>%
+  mutate(
+    Stand_Health = factor(Stand_Health,
+                          levels = c("Severe", "Moderate", "Healthy"),
+                          ordered = TRUE)
+  )
+
+non_native_cover_by_stand_health <- ggplot(non_native_cover, aes(x = Stand_Health, y = NonNative_Prop)) +
+  geom_boxplot() +
+  labs(
+    # title = "Proportion of Non-Native Cover by Stand Health",
+    x = "Stand Health",
+    y = "Proportion Non-Native"
+  )
+non_native_cover_by_stand_health
+```
+
+# Significance Tests for Non-Native Cover Proportion
+
+```{r}
+non_native_aov <- aov(NonNative_Prop ~ Stand_Health, data = non_native_cover)
+summary(non_native_aov)
+
+shapiro.test(residuals(non_native_aov))
+leveneTest(NonNative_Prop ~ Stand_Health, data = non_native_cover)
+
+TukeyHSD(non_native_aov)
+
+kruskal.test(NonNative_Prop ~ Stand_Health, data = non_native_cover)
+
+pairwise.wilcox.test(non_native_cover$NonNative_Prop,
+                     non_native_cover$Stand_Health,
+                     p.adjust.method = "BH")
+```
+
+# OPTIONAL TESTS
+
+```{r}
+# Relate Simpson’s diversity directly to HWA & crown metrics
+## Does diversity decline with increasing HWA, more transparency, lower LCR?
+
+simpson_df2 <- simpson_df %>%
+  left_join(
+    plot_sev %>%
+      select(Site, Plot, HWA_mean, Transp_mean, LCR_mean),
+    by = c("Site", "Plot")
+  )
+
+simpson_lm <- lm(Simpson ~ HWA_mean + Transp_mean + LCR_mean, data = simpson_df2)
+summary(simpson_lm)
+
+### optional diagnostics
+par(mfrow = c(2, 2))
+plot(simpson_lm)
+par(mfrow = c(1, 1))
+
+# Do the same for Non-Native Proportion
+## Does the proportion of non-native cover increase with HWA severity or canopy opening?
+
+non_native_cover2 <- non_native_cover %>%
+  left_join(
+    plot_sev %>%
+      select(Site, Plot, HWA_mean, Transp_mean, LCR_mean),
+    by = c("Site", "Plot")
+  )
+
+nn_lm1 <- lm(NonNative_Prop ~ HWA_mean, data = non_native_cover2)
+summary(nn_lm1)
+
+nn_lm2 <- lm(NonNative_Prop ~ HWA_mean + Transp_mean + LCR_mean, data = non_native_cover2)
+summary(nn_lm2)
+```
+
+### HWA Health classification plot
+
+```{r}
+hwa_health <- hwa %>%
+  mutate(
+    Stand_Health_from_value = case_when(
+      Health_Value >= 1   & Health_Value < 4.5 ~ "Healthy",
+      Health_Value >= 4.5 & Health_Value < 6.5 ~ "Moderate",
+      Health_Value >= 6.5 & Health_Value <= 9  ~ "Severe",
+      TRUE ~ NA_character_
+    ),
+    Stand_Health_from_value = factor(
+      Stand_Health_from_value,
+      levels = c("Severe", "Moderate", "Healthy"),
+      ordered = TRUE
+    )
+  )
+
+hwa_health %>%
+  mutate(Match = Stand_Health == Stand_Health_from_value) %>%
+  count(Match)
+
+# How do I label the columns and rows?
+
+hwa_health %>%
+  count(Stand_Health_from_value, Stand_Health) %>%
+  pivot_wider(names_from = Stand_Health_from_value, values_from = n, values_fill = 0)
+
+hwa_health_comparison <- ggplot(hwa_health, aes(x = Stand_Health, y = Stand_Health_from_value)) +
+  geom_jitter(width = 0.2, height = 0.2, alpha = 0.7, color = "darkgreen") +
+  labs(
+    title = "Comparison of Stand_Health vs Health_Value Classification",
+    x = "Stand_Health",
+    y = "Health_Value_Derived_Health"
+  ) +
+  theme_bw()
+hwa_health_comparison
+```
+
+```{r, eval=FALSE}
+plot_from_value_2of3 <- hwa_health %>%
+  filter(!is.na(Stand_Health_from_value)) %>%
+  count(Site, Plot, Stand_Health_from_value, name="n_cat") %>%
+  group_by(Site, Plot) %>%
+  mutate(n_total = sum(n_cat), prop = n_cat / n_total) %>%
+  slice_max(n_cat, n=1, with_ties=FALSE) %>%
+  ungroup() %>%
+  transmute(Site, Plot,
+            Derived_2of3 = if_else(prop >= 2/3,
+                                   as.character(Stand_Health_from_value),
+                                   "Moderate")) %>% 
+  mutate(Derived_2of3 = factor(Derived_2of3,
+                               levels=c("Severe","Moderate","Healthy"),
+                               ordered=TRUE))
+
+plot_field_majority <- hwa_health %>%
+  filter(!is.na(Stand_Health)) %>%
+  count(Site, Plot, Stand_Health, name = "n_field") %>%
+  group_by(Site, Plot) %>%
+  slice_max(n_field, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    Stand_Health = factor(Stand_Health,
+                          levels = c("Severe","Moderate","Healthy"),ordered = TRUE)
+  )
+
+plot_compare_2of3 <- plot_field_majority %>%
+  left_join(plot_from_value_2of3, by = c("Site","Plot")) %>%
+  filter(!is.na(Stand_Health), !is.na(Derived_2of3)) %>%   
+  mutate(Stand_Health = factor(Stand_Health, levels = c("Severe","Moderate","Healthy"), ordered = TRUE),
+    Derived_2of3 = factor(Derived_2of3, levels = c("Severe","Moderate","Healthy"), ordered = TRUE)
+  )
+
+plot_compare_2of3_scatter <- ggplot(plot_compare_2of3,
+                                    aes(x = Stand_Health, y = Derived_2of3)) +
+  geom_jitter(width = 0.15, height = 0.15, alpha = 0.8, color = "darkgreen", size = 3) +
+  labs(
+    title = "Plot-level Comparison: Stand_Health vs Health_Value (2/3 Rule)",
+    x = "Stand_Health",
+    y = "Derived from Health_Value (2/3 Rule)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 10)
+  )
+
+plot_compare_2of3_scatter
+
+ggsave("plot_level_health_comparison_2of3.png",
+       plot = plot_compare_2of3_scatter,
+       width = 5, height = 4, units = "in", dpi = 96)
+```
+
+------------------------------------------------------------------------
+
+```{r}
+## 1. Derived health (2/3 rule) at DEP_DEC_Site level ----
+plot_from_value_2of3 <- hwa_health %>%
+  filter(!is.na(Stand_Health_from_value), !is.na(DEP_DEC_Site)) %>%
+  count(DEP_DEC_Site, Stand_Health_from_value, name = "n_cat") %>%
+  group_by(DEP_DEC_Site) %>%
+  mutate(
+    n_total = sum(n_cat),
+    prop    = n_cat / n_total
+  ) %>%
+  slice_max(n_cat, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    DEP_DEC_Site,
+    Derived_2of3 = if_else(
+      prop >= 2/3,
+      as.character(Stand_Health_from_value),
+      "Moderate"                # fallback when no category reaches 2/3
+    )
+  ) %>%
+  mutate(
+    Derived_2of3 = factor(
+      Derived_2of3,
+      levels = c("Severe", "Moderate", "Healthy"),
+      ordered = TRUE
+    )
+  )
+
+## 2. Field majority stand health at DEP_DEC_Site level ----
+plot_field_majority <- hwa_health %>%
+  filter(!is.na(Stand_Health), !is.na(DEP_DEC_Site)) %>%
+  count(DEP_DEC_Site, Stand_Health, name = "n_field") %>%
+  group_by(DEP_DEC_Site) %>%
+  slice_max(n_field, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    Stand_Health = factor(
+      Stand_Health,
+      levels = c("Severe", "Moderate", "Healthy"),
+      ordered = TRUE
+    )
+  )
+
+## 3. Join & compare ----
+plot_compare_2of3 <- plot_field_majority %>%
+  left_join(plot_from_value_2of3, by = "DEP_DEC_Site") %>%
+  filter(!is.na(Stand_Health), !is.na(Derived_2of3)) %>%
+  mutate(
+    Stand_Health = factor(
+      Stand_Health,
+      levels  = c("Severe", "Moderate", "Healthy"),
+      ordered = TRUE
+    ),
+    Derived_2of3 = factor(
+      Derived_2of3,
+      levels  = c("Severe", "Moderate", "Healthy"),
+      ordered = TRUE
+    )
+  )
+
+## 4. Plot ----
+plot_compare_2of3_scatter <- ggplot(
+  plot_compare_2of3,
+  aes(x = Stand_Health, y = Derived_2of3)
+) +
+  geom_jitter(width = 0.15, height = 0.15, alpha = 0.8,
+              color = "darkgreen", size = 3) +
+  labs(
+    #title = "DEP_DEC_Site-level Comparison: Stand_Health vs Health_Value (2/3 Rule)",
+    x = "Field Stand Health (DEP_DEC_Site)",
+    y = "Derived from Health_Value (2/3 Rule, DEP_DEC_Site)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 10)
+  )
+
+plot_compare_2of3_scatter
+
+ggsave(
+  "dep_dec_site_level_health_comparison_2of3.png",
+  plot  = plot_compare_2of3_scatter,
+  width = 5, height = 4, units = "in", dpi = 96
+)
+```
+
+```{r}
+confusion <- plot_compare_2of3 %>%
+  count(Field = Stand_Health, Derived = Derived_2of3) %>%
+  tidyr::pivot_wider(
+    names_from = Derived,
+    values_from = n,
+    values_fill = 0
+  )
+
+confusion
+str(confusion)
+
+confusion_matrix <- confusion %>%
+  column_to_rownames("Field") %>%      # set Field as rownames
+  as.matrix()                          # convert tibble → matrix
+
+confusion_matrix
+is.matrix(confusion_matrix)  # TRUE
+
+StuartMaxwellTest(confusion_matrix)
+```
+
+------------------------------------------------------------------------
+
+.
+
+```{r}
+hwa %>%
+  mutate(
+    Stand_Health = factor(Stand_Health,
+                          levels = c("Severe", "Moderate", "Healthy"),
+                          ordered = TRUE),
+    Transparency = as.numeric(Transparency),
+    LCR = as.numeric(LCR)
+  ) %>%
+  ggplot(aes(x = Transparency, y = LCR, color = Stand_Health)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(
+    # title = "LCR vs Transparency by Stand Health",
+    x = "Transparency (%)",
+    y = "Live Crown Ratio (%)",
+    color = "Stand Health"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 10)
+  )
+
+ggsave("lcr_vs_transparency.png", width = 5, height = 4, units = "in", dpi = 96)
+
+```
+
+# Significance of LCR to Transparency
+
+```{r}
+lcr_mod1 <- lm(LCR ~ Transparency, data = hwa)
+summary(lcr_mod1)
+
+
+lcr_mod2 <- lm(LCR ~ Transparency * Stand_Health, data = hwa)
+anova(lcr_mod2)
+summary(lcr_mod2)
+
+cor_test_lcr_transp <- cor.test(
+  hwa$Transparency,
+  hwa$LCR,
+  method = "pearson"
+)
+
+cor_test_lcr_transp
+
+```
+
+### GGSaves
+
+```{r, eval=FALSE}
+### Save all ggplots as 5x4 inches
+
+# Save each plot object created earlier in the script
+
+ggsave("plant_richness_by_stand_health.png", plot = plant_richness_by_stand, width = 5, height = 4, units = "in", dpi = 96)
+ggsave("tree_richness_by_stand_health.png", plot = tree_richness_by_stand_health, width = 5, height = 4, units = "in", dpi = 96)
+ggsave("dbh_by_stand_health_all_trees.png", plot = dbh_by_stand_health_all_trees, width = 5, height = 4, units = "in", dpi = 96)
+ggsave("dbh_by_stand_health_hemlocks.png", plot = dbh_by_stand_health_hemlocks, width = 5, height = 4, units = "in", dpi = 96)
+ggsave("simpsons_index_by_stand_health.png", plot = simpsons_index_by_stand_health, width = 5, height = 4, units = "in", dpi = 96)
+ggsave("non_native_cover_by_stand_health.png", plot = non_native_cover_by_stand_health, width = 5, height = 4, units = "in", dpi = 96)
+
+hwa_health_comparison <- ggplot(hwa_health, aes(x = Stand_Health, y = Stand_Health_from_value)) +
+  geom_jitter(width = 0.2, height = 0.2, alpha = 0.7, color = "darkgreen") +
+  labs(
+    title = "Comparison of Stand_Health vs Health_Value Classification",
+    x = "Stand_Health",
+    y = "Health_Value_Derived_Health"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 11),  # <-- Adjust this number (default ~14–16)
+    axis.title = element_text(size = 10),
+    axis.text = element_text(size = 10)
+  )
+
+
+ggsave("hwa_health_comparison.png", plot = hwa_health_comparison, width = 5, height = 4, units = "in", dpi = 96)
+
+
+
+```
+
+# Map?
+
+```{r, eval=FALSE}
+# 1. Inspect layers in the KML
+st_layers("CSC HWA Project.kml")
+
+# 2. Read the layer (use name or index)
+hwa_sites <- st_read("CSC HWA Project.kml", layer = "Waypoints")
+
+hwa_sites_clean <- hwa_sites %>% 
+  filter(Name != "DEP YP PARKING")
+
+st_crs(hwa_sites_clean)
+
+ggplot(hwa_sites_clean) +
+  geom_sf() +
+  theme_minimal()
+
+library(tigris)
+
+options(tigris_use_cache = TRUE)
+
+# Get NY counties and transform to same CRS as your points
+ny_counties <- counties(state = "NY", cb = TRUE, year = 2021) %>% 
+  st_transform(st_crs(hwa_sites_clean))
+
+ggplot() +
+  geom_sf(data = ny_counties, fill = NA) +                    # outline of NY counties
+  geom_sf(data = hwa_sites_clean, size = 2) +                 # your sites
+  theme_minimal() +
+  labs(x = "Longitude", y = "Latitude")
+
+hwa_sites_clean <- hwa_sites_clean %>% 
+  mutate(site_group = gsub(" .*", "", Name))   # takes the first chunk before a space
+
+ggplot() +
+  geom_sf(data = ny_counties, fill = NA) +
+  geom_sf(data = hwa_sites_clean,
+          aes(color = site_group),
+          size = 2) +
+  theme_minimal() +
+  labs(color = "Site group")
+
+ggplot() +
+  geom_sf(data = ny_counties, fill = NA, color = "gray60") +
+  geom_sf(data = hwa_sites_clean, aes(color = site_group), size = 2) +
+  coord_sf(xlim = c(-75.0, -73.7),
+           ylim = c(41.6, 42.4),
+           expand = FALSE) +
+  theme_minimal() +
+  labs(color = "Site Group")
+
+b <- st_bbox(hwa_sites_clean)
+
+ggplot() +
+  geom_sf(data = ny_counties, fill = NA, color = "gray60") +
+  geom_sf(data = hwa_sites_clean, aes(color = site_group), size = 3) +
+  coord_sf(
+    xlim = c(b["xmin"] - 0.03, b["xmax"] + 0.03),
+    ylim = c(b["ymin"] - 0.03, b["ymax"] + 0.03),
+    expand = FALSE
+  ) +
+  theme_minimal() +
+  labs(color = "Site Group")
+
+library(leaflet)
+
+leaflet(hwa_sites_clean) |>
+  addProviderTiles("OpenStreetMap") |>
+  addMarkers(label = ~Name)
+
+#####
+
+ny_counties <- st_transform(ny_counties, st_crs(hwa_sites_clean))
+
+# Bounding box of your sites
+b <- st_bbox(hwa_sites_clean)
+
+pad <- 0.03   # padding around sites
+xlim <- c(min(b["xmin"], b["xmax"]) - pad,
+          max(b["xmin"], b["xmax"]) + pad)
+ylim <- c(min(b["ymin"], b["ymax"]) - pad,
+          max(b["ymin"], b["ymax"]) + pad)
+
+# Keep only counties that actually contain at least one site
+site_union <- st_union(st_geometry(hwa_sites_clean))
+
+ny_counties_zoom <- ny_counties[st_intersects(ny_counties, site_union, sparse = FALSE), ]
+
+# Centroids for labels
+county_labels <- st_centroid(ny_counties_zoom)
+
+ggplot() +
+  # county outlines
+  geom_sf(data = ny_counties_zoom,
+          fill = NA,
+          color = "grey40",
+          linewidth = 0.4) +
+  
+  # your sites
+  geom_sf(data = hwa_sites_clean,
+          aes(color = site_group),
+          size = 3) +
+  
+  # county name labels
+  geom_sf_text(data = county_labels,
+               aes(label = NAME),
+               size = 3) +
+  
+  # zoom to bbox around your sites
+  coord_sf(
+    xlim = xlim,
+    ylim = ylim,
+    expand = FALSE
+  ) +
+  
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    color = "Site Group"
+  ) +
+  theme_minimal() +
+  theme(
+    # extra right margin so the legend isn’t clipped
+    plot.margin = margin(5.5, 80, 5.5, 5.5, "pt"),
+    legend.position = "right",
+    legend.key.height = unit(0.35, "cm"),
+    legend.key.width  = unit(0.35, "cm"),
+    legend.text  = element_text(size = 7),
+    legend.title = element_text(size = 9)
+  )
+
+```
+
+```{r, eval=FALSE}
+# 1) Ensure your sites are in WGS84
+if (is.na(st_crs(hwa_sites_clean))) {
+  st_crs(hwa_sites_clean) <- 4326
+}
+
+# 2) Group by site prefix instead of each point
+hwa_sites_clean <- hwa_sites_clean %>%
+  mutate(site_group = gsub("[0-9].*", "", Name))   # DECBB1–3 → DECBB, DEPYP2 → DEPYP, etc.
+
+# 3) NY counties in same CRS
+options(tigris_use_cache = TRUE)
+ny_counties <- counties(state = "NY", cb = TRUE, year = 2021) %>%
+  st_transform(st_crs(hwa_sites_clean))
+
+# 4) County centroids for labels
+ny_centroids <- st_centroid(ny_counties)
+
+b <- st_bbox(hwa_sites_clean)
+pad <- 0.05   # tweak padding if needed
+
+xlim <- c(b["xmin"] - pad, b["xmax"] + pad)
+ylim <- c(b["ymin"] - pad, b["ymax"] + pad)
+
+ggplot() +
+  # county outlines
+  geom_sf(data = ny_counties,
+          fill = NA,
+          color = "grey60",
+          linewidth = 0.4) +
+  
+  # your sites (grouped by site_group)
+  geom_sf(data = hwa_sites_clean,
+          aes(color = site_group),
+          size = 3) +
+  
+  # county name labels
+  geom_sf_text(data = ny_centroids,
+               aes(label = NAME),
+               size = 2.7) +
+  
+  # zoom to your sites
+  coord_sf(xlim = xlim, ylim = ylim, expand = FALSE) +
+  
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    color = "Site group"
+  ) +
+  guides(
+    color = guide_legend(ncol = 2)   # legend in 2 columns, shorter
+  ) +
+  theme_minimal() +
+  theme(
+    plot.margin = margin(5.5, 80, 5.5, 5.5, "pt"),  # extra room on right
+    legend.position = "right",
+    legend.key.height = unit(0.35, "cm"),
+    legend.key.width  = unit(0.35, "cm"),
+    legend.text  = element_text(size = 7),
+    legend.title = element_text(size = 9)
+  )
+
+```
