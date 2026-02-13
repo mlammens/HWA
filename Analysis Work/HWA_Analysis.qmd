@@ -18,6 +18,7 @@ library(sf)
 library(tigris)
 library(leaflet)
 library(grid)
+library(cowplot)
 ```
 
 ## Import and clean data
@@ -80,89 +81,109 @@ site_sev <- hwa %>%
 
 ```{r}
 # Tree richness
-tree_richness <- trees %>%
-  group_by(Site, Plot) %>%
+plot_tree_richness <- trees %>%
+  group_by(Land_Manager, Plot) %>%
   summarize(Tree_Richness = n_distinct(Species_Name, na.rm = TRUE),
             n_Trees = n(), .groups = "drop")
 
-tree_richness_hist <- trees %>%
+site_tree_richness <- trees %>%
   group_by(DEP_DEC_Site) %>%
   summarize(Tree_Richness = n_distinct(Species_Name, na.rm = TRUE),
             n_Trees = n(), .groups = "drop")
 
 # Plant richness
-plant_richness <- ground_cover %>%
-  group_by(Site, Plot) %>%
+plot_plant_richness <- ground_cover %>%
+  group_by(Land_Manager, Plot) %>%
   summarize(Plant_Richness = n_distinct(Species, na.rm = TRUE),
             .groups = "drop")
 
-plant_richness_hist <- ground_cover %>%
+site_plant_richness <- ground_cover %>%
   group_by(DEP_DEC_Site) %>%
   summarize(Plant_Richness = n_distinct(Species, na.rm = TRUE),
             .groups = "drop")
 
-richness_and_severity <- plot_sev %>%
-  select(Site, Plot, Stand_Health) %>%
+## Merge richness with HWA severity data
+plot_richness_and_severity <- plot_sev %>%
+  select(Land_Manager, Plot, Stand_Health) %>%
   distinct() %>%
-  left_join(tree_richness, by = c("Site","Plot")) %>%
-  left_join(plant_richness, by = c("Site","Plot"))
+  left_join(plot_tree_richness, by = c("Land_Manager","Plot")) %>%
+  left_join(plot_plant_richness, by = c("Land_Manager","Plot"))
 
-richness_and_severity_hist <- plot_sev_hist %>%
+site_richness_and_severity <- site_sev %>%
   select(DEP_DEC_Site, Stand_Health) %>%
   distinct() %>%
-  left_join(tree_richness_hist,  by = "DEP_DEC_Site") %>%
-  left_join(plant_richness_hist, by = "DEP_DEC_Site")
+  left_join(site_tree_richness,  by = "DEP_DEC_Site") %>%
+  left_join(site_plant_richness, by = "DEP_DEC_Site")
 
 # Reorder Stand_Health levels
-richness_combined <- richness_and_severity %>%
+plot_richness_and_severity <- plot_richness_and_severity %>% # removed richness_combined
   mutate(Stand_Health = factor(Stand_Health, 
-                               levels = c("Severe", "Moderate", "Healthy"), 
+                               levels = c("Healthy", "Moderate", "Severe"), 
                                ordered = TRUE))
 
-richness_combined_hist <- richness_and_severity_hist %>%
+site_richness_and_severity <- site_richness_and_severity %>%
   mutate(Stand_Health = factor(Stand_Health, 
-                               levels = c("Severe", "Moderate", "Healthy"), 
+                               levels = c("Healthy", "Moderate", "Severe"), 
                                ordered = TRUE))
-
-# Plots
-
-plant_richness_by_stand <- ggplot(richness_combined, aes(x = Stand_Health, y = Plant_Richness)) +
-  geom_boxplot() +
-  labs(title = "Plant Richness by Stand Health", x = "Stand Health", y = "Plant Species Richness")
-plant_richness_by_stand
-
-tree_richness_by_stand_health <- ggplot(richness_combined, aes(x = Stand_Health, y = Tree_Richness)) +
-  geom_boxplot() +
-  labs(title = "Tree Richness by Stand Health", x = "Stand Health", y = "Tree Species Richness")
-tree_richness_by_stand_health
-
-## Historical Plots
-
-plant_richness_by_stand_hist <- ggplot(
-  data = richness_combined_hist,
-  mapping = aes(x = Stand_Health, y = Plant_Richness)
-) +
-  geom_boxplot() +
-  labs(
-    title = "Historical Site Plant Richness by Stand Health",
-    x = "Stand Health",
-    y = "Plant Species Richness"
-  )
-plant_richness_by_stand_hist
-
-
-tree_richness_by_stand_health_hist <- ggplot(
-  data = richness_combined_hist,
-  mapping = aes(x = Stand_Health, y = Tree_Richness)
-) +
-  geom_boxplot() +
-  labs(
-    title = "Historical Site Tree Richness by Stand Health",
-    x = "Stand Health",
-    y = "Tree Species Richness"
-  )
-tree_richness_by_stand_health_hist
 ```
+
+
+## Plots and stats for richness
+
+
+```{r}
+# Plot-level
+plant_richness_plot <- ggplot(plot_richness_and_severity, 
+                              aes(x = Stand_Health, y = Plant_Richness)) +
+  geom_boxplot() +
+  labs(title = "Plot-level", 
+       x = "Stand Health", y = "Plant Species Richness") +
+  coord_cartesian(ylim = c(0, 44)) +
+  theme_minimal()
+#plant_richness_plot
+
+tree_richness_plot <- ggplot(plot_richness_and_severity, 
+                             aes(x = Stand_Health, y = Tree_Richness)) +
+  geom_boxplot() +
+  labs(title = "Plot-level", 
+       x = "Stand Health", y = "Tree Species Richness") +
+  coord_cartesian(ylim = c(0, 14)) +
+  theme_minimal()
+#tree_richness_plot
+
+## Site-level
+plant_richness_site <- ggplot(site_richness_and_severity,
+                              aes(x = Stand_Health, y = Plant_Richness)) +
+  geom_boxplot() +
+  labs(
+    title = "Site-level",
+    x = "Stand Health",
+    y = "Plant Species Richness") +
+  coord_cartesian(ylim = c(0, 44)) +
+  theme_minimal()
+#plant_richness_site
+
+tree_richness_site <- ggplot(site_richness_and_severity,
+                             aes(x = Stand_Health, y = Tree_Richness)) +
+  geom_boxplot() +
+  labs(
+    title = "Site-level",
+    x = "Stand Health",
+    y = "Tree Species Richness") + 
+  coord_cartesian(ylim = c(0, 14)) +
+  theme_minimal()
+#tree_richness_site
+
+## Make a multi-panel plot
+aligned <- align_plots(plant_richness_plot, tree_richness_plot, 
+                       plant_richness_site, tree_richness_site,
+                       align = "hv", axis = "tblr")
+plot_grid(aligned[[1]], aligned[[3]], 
+          aligned[[2]], aligned[[4]],
+          labels = c("A", "B", "C", "D"), ncol = 2)
+
+```
+
 
 #### Richniss stats analysis
 
