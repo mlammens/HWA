@@ -20,34 +20,39 @@ library(leaflet)
 library(grid)
 ```
 
-## Get Data
+## Import and clean data
 
 Read in the data sets and rename some columns to ensure consistency across data sets.
 
 ```{r}
+#| results='hide
+
+## Read in the data files
 canopy <- read.csv("Hemlock Data(Canopy).csv")
 ground_cover <- read.csv("Hemlock Data(Ground_Cover).csv")
 hwa <- read.csv("Hemlock Data(HWA).csv")
 trees <- read.csv("Hemlock Data(Trees).csv")
-```
 
-```{r, results='hide'}
-### Standardize column names for easier coding
-colnames(canopy) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","North","East","South","West","Average")
-colnames(ground_cover) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Species","Common","Native_or_Non_Native","Coverage","Notes")
-colnames(hwa) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Tree","HWA","Transparency","LCR","Health_Value")
-colnames(trees) <- c("DEP_DEC_Site","Site","Plot","Stand_Health","Species_Name","Common","DBH_cm","Notes")
+## Standardize column names for easier coding
+colnames(canopy) <- c("DEP_DEC_Site","Land_Manager","Plot","Stand_Health","North","East","South","West","Average")
+colnames(ground_cover) <- c("DEP_DEC_Site","Land_Manager","Plot","Stand_Health","Species","Common","Native_or_Non_Native","Coverage","Notes")
+colnames(hwa) <- c("DEP_DEC_Site","Land_Manager","Plot","Stand_Health","Tree","HWA","Transparency","LCR","Health_Value")
+colnames(trees) <- c("DEP_DEC_Site","Land_Manager","Plot","Stand_Health","Species_Name","Common","DBH_cm","Notes")
 
-### Diagnostics: Check unique values
+## Diagnostics: Check unique values
 sort(unique(ground_cover$Species))
 sort(unique(trees$Species_Name))
 ```
 
-## Plot-level Severity
+## Calcualte Plot-level HWA Severity Metrics
+
+Calculate HWA severity metrics by plot and by site. 
+In our study design, plots are nested within sites. 
+At each site we collected data from three plots.
 
 ```{r}
 plot_sev <- hwa %>%
-  group_by(Site, Plot, Stand_Health) %>%
+  group_by(Land_Manager, Plot, Stand_Health) %>%
   summarize(
     HWA_mean = mean(HWA, na.rm = TRUE),
     HWA_median = median(HWA, na.rm = TRUE),
@@ -57,7 +62,7 @@ plot_sev <- hwa %>%
     .groups = "drop"
   )
 
-plot_sev_hist <- hwa %>%
+site_sev <- hwa %>%
   group_by(DEP_DEC_Site, Stand_Health) %>%
   summarize(
     HWA_mean = mean(HWA, na.rm = TRUE),
